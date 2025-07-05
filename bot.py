@@ -4,7 +4,9 @@ import random
 import sqlite3
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler
+import time
+import os
 
 TOKEN = '8108454538:AAE4ZlhpoaN5Sej3M5kukwKaIIWbTr82-lY'
 PROXIES = [
@@ -12,7 +14,6 @@ PROXIES = [
     "http://PP_D4F1YGPKC1-country-IN:omf4xz27@evo-pro.porterproxies.com:61236"
 ]
 GATE_KEYWORDS = ["stripe", "paypal", "square", "authorize.net", "shopify pay", "klarna", "afterpay"]
-
 ua = UserAgent()
 
 def init_db():
@@ -27,30 +28,45 @@ async def fetch(session, url, proxy=None):
     try:
         async with session.get(url, headers=headers, proxy=proxy, timeout=15) as response:
             return await response.text()
-    except:
+    except Exception as e:
+        print(f"Fetch error: {e}")
         return None
 
-async def duckduckgo_search(query, max_results=50):
+async def duckduckgo_search(query, max_results=100):
     results, page = set(), 0
-    connector = aiohttp.TCPConnector(limit=10)
-    async with aiohttp.ClientSession(connector=connector) as session:
+    async with aiohttp.ClientSession() as session:
         while len(results) < max_results:
             search_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}&s={page * 50}"
             proxy = random.choice(PROXIES)
-            try:
-                html = await fetch(session, search_url, proxy)
-                if not html:
-                    break
-                soup = BeautifulSoup(html, 'html.parser')
-                new_links = [a['href'] for a in soup.select('.result__url') if a.get('href')]
-                if not new_links:
-                    break
-                results.update(new_links)
-                page += 1
-                await asyncio.sleep(random.uniform(1, 2))
-            except Exception as e:
-                print(f"Search Error: {e}")
-                await asyncio.sleep(3)
+            html = await fetch(session, search_url, proxy)
+            if not html:
+                break
+            soup = BeautifulSoup(html, 'html.parser')
+            new_links = [a['href'] for a in soup.select('.result__url') if a.get('href')]
+            if not new_links:
+                break
+            results.update(new_links)
+            page += 1
+            await asyncio.sleep(random.uniform(1, 2))
+    return list(results)
+
+async def bing_search(query, max_results=100):
+    # Scrapes Bing HTML (no API key needed, but may get limited at high volume)
+    results, page = set(), 0
+    async with aiohttp.ClientSession() as session:
+        while len(results) < max_results:
+            search_url = f"https://www.bing.com/search?q={query.replace(' ', '+')}&first={page*10+1}"
+            proxy = random.choice(PROXIES)
+            html = await fetch(session, search_url, proxy)
+            if not html:
+                break
+            soup = BeautifulSoup(html, 'html.parser')
+            links = [a['href'] for a in soup.select('li.b_algo h2 a') if a.get('href')]
+            if not links:
+                break
+            results.update(links)
+            page += 1
+            await asyncio.sleep(random.uniform(1, 2))
     return list(results)
 
 async def extract_info(url, session):
@@ -80,23 +96,36 @@ async def start(update, context):
 async def handle_dork(update, context):
     if context.args:
         query = ' '.join(context.args)
-        msg = await update.message.reply_text(f"🔍 Searching for: {query}")
+        msg = await update.message.reply_text(f"🔍 Searching DuckDuckGo & Bing for: {query}")
 
-        urls = await duckduckgo_search(query)
-        await msg.edit_text(f"🔍 Found {len(urls)} URLs. Analyzing...")
+        ddg_urls = await duckduckgo_search(query, max_results=80)
+        bing_urls = await bing_search(query, max_results=80)
+        all_urls = list(set(ddg_urls + bing_urls))[:160]  # Deduplicate and limit to 160
+
+        await msg.edit_text(f"🔍 Found {len(all_urls)} URLs. Analyzing (this may take a while)...")
 
         async with aiohttp.ClientSession(headers={'User-Agent': ua.random}) as session:
-            tasks = [extract_info(url, session) for url in urls]
+            tasks = [extract_info(url, session) for url in all_urls]
             results = await asyncio.gather(*tasks)
 
         clean_results = [r for r in results if r]
         await save_to_db(query, clean_results)
 
-        for item in clean_results[:10]:  # limit to 10 to avoid spam
+        # Send top 10 in chat for quick view
+        for item in clean_results[:10]:
             text = f"🔗 {item['url']}\n📛 {item['title']}\n💳 Gateway: {item['gateway']}"
             await update.message.reply_text(text, reply_to_message_id=update.message.message_id)
 
-        await msg.edit_text(f"✅ Completed scanning for: {query}")
+        # Also create and send a text file with ALL results!
+        filename = f'dork_results_{int(time.time())}.txt'
+        with open(filename, 'w', encoding='utf-8') as f:
+            for item in clean_results:
+                f.write(f"{item['url']}\n{item['title']}\n{item['gateway']}\n---\n")
+        with open(filename, 'rb') as f:
+            await update.message.reply_document(document=f, filename=filename)
+        os.remove(filename)
+
+        await msg.edit_text(f"✅ Completed scanning for: {query} ({len(clean_results)} results)")
     else:
         await update.message.reply_text("❗ Use the command like: /dork intext:\"shopify\" inurl:\"donation\"")
 
