@@ -1,29 +1,28 @@
 import asyncio
 import aiohttp
 import random
-import sqlite3
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
 from telegram.ext import ApplicationBuilder, CommandHandler
 import time
 import os
 
-TOKEN = '8108454538:AAE4ZlhpoaN5Sej3M5kukwKaIIWbTr82-lY'
+TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
 PROXIES = [
+    "http://PP_D4F1YGPKC1-country-UK:omf4xz27@evo-pro.porterproxies.com:61236",
+    "http://PP_D4F1YGPKC1-country-SG:omf4xz27@evo-pro.porterproxies.com:61236",
+    "http://PP_D4F1YGPKC1-country-TH:omf4xz27@evo-pro.porterproxies.com:61236",
+    "http://PP_D4F1YGPKC1-country-PH:omf4xz27@evo-pro.porterproxies.com:61236",
+    "http://PP_D4F1YGPKC1-country-MY:omf4xz27@evo-pro.porterproxies.com:61236",
+    "http://PP_D4F1YGPKC1-country-MX:omf4xz27@evo-pro.porterproxies.com:61236",
+    "http://PP_D4F1YGPKC1-country-JP:omf4xz27@evo-pro.porterproxies.com:61236",
+    "http://PP_D4F1YGPKC1-country-EU:omf4xz27@evo-pro.porterproxies.com:61236",
     "http://PP_D4F1YGPKC1-country-US:omf4xz27@evo-pro.porterproxies.com:61236",
     "http://PP_D4F1YGPKC1-country-IN:omf4xz27@evo-pro.porterproxies.com:61236"
+    # (You can add US, IN, etc. as before if you want global rotation!)
 ]
-GATE_KEYWORDS = [
-    "shopify", "shopify pay", "stripe", "paypal", "square", "authorize.net", "klarna", "afterpay"
-]
-ua = UserAgent()
 
-def init_db():
-    conn = sqlite3.connect('scraped_results.db')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS results (query TEXT, url TEXT UNIQUE, title TEXT, gateway TEXT)''')
-    conn.commit()
-    conn.close()
+ua = UserAgent()
 
 async def fetch(session, url, proxy=None):
     headers = {'User-Agent': ua.random}
@@ -70,75 +69,82 @@ async def bing_search(query, max_results=100):
             await asyncio.sleep(random.uniform(1, 2))
     return list(results)
 
-def detect_gateway(html):
-    html_lower = html.lower()
-    # Priority: Shopify!
-    if "shopify" in html_lower or "shopify pay" in html_lower:
-        return "shopify"
-    for gw in GATE_KEYWORDS:
-        if gw in html_lower:
-            return gw
-    return "Unknown"
+async def yahoo_search(query, max_results=100):
+    results, page = set(), 0
+    async with aiohttp.ClientSession() as session:
+        while len(results) < max_results:
+            start = page * 10 + 1
+            search_url = f"https://search.yahoo.com/search?p={query.replace(' ', '+')}&b={start}"
+            proxy = random.choice(PROXIES)
+            html = await fetch(session, search_url, proxy)
+            if not html:
+                break
+            soup = BeautifulSoup(html, 'html.parser')
+            links = [a['href'] for a in soup.select('div#web h3.title a') if a.get('href')]
+            if not links:
+                break
+            results.update(links)
+            page += 1
+            await asyncio.sleep(random.uniform(1, 2))
+    return list(results)
 
-async def extract_info(url, session):
-    html = await fetch(session, url, proxy=random.choice(PROXIES))
-    if not html:
-        return None
-    soup = BeautifulSoup(html, 'html.parser')
-    title = soup.title.string.strip() if soup.title else 'No Title'
-    gateway = detect_gateway(html)
-    return {'url': url, 'title': title, 'gateway': gateway}
-
-async def save_to_db(query, results):
-    conn = sqlite3.connect('scraped_results.db')
-    cursor = conn.cursor()
-    for r in results:
-        try:
-            cursor.execute("INSERT OR IGNORE INTO results (query, url, title, gateway) VALUES (?, ?, ?, ?)",
-                           (query, r['url'], r['title'], r['gateway']))
-        except Exception as e:
-            print(f"DB Error: {e}")
-    conn.commit()
-    conn.close()
+async def mojeek_search(query, max_results=100):
+    results, page = set(), 0
+    async with aiohttp.ClientSession() as session:
+        while len(results) < max_results:
+            search_url = f"https://www.mojeek.com/search?q={query.replace(' ', '+')}&s={page*10}"
+            proxy = random.choice(PROXIES)
+            html = await fetch(session, search_url, proxy)
+            if not html:
+                break
+            soup = BeautifulSoup(html, 'html.parser')
+            links = [a['href'] for a in soup.select('ol.results li div.result > h2 > a') if a.get('href')]
+            if not links:
+                break
+            results.update(links)
+            page += 1
+            await asyncio.sleep(random.uniform(1, 2))
+    return list(results)
 
 async def start(update, context):
-    await update.message.reply_text("🤖 Send your query using /dork <query>")
+    await update.message.reply_text(
+        "🤖 Send your search using /dork <what you want to find> (e.g. /dork t-shirt)\n"
+        "Now using DuckDuckGo, Bing, Yahoo, and Mojeek for maximum results!"
+    )
 
 async def handle_dork(update, context):
     if context.args:
         query = ' '.join(context.args)
-        msg = await update.message.reply_text(f"🔍 Searching DuckDuckGo & Bing for: {query}")
+        msg = await update.message.reply_text(f"🔍 Searching all engines for: {query}")
 
-        ddg_urls = await duckduckgo_search(query, max_results=100)
-        bing_urls = await bing_search(query, max_results=100)
-        all_urls = list(set(ddg_urls + bing_urls))
+        # Scrape all engines concurrently!
+        ddg_task = duckduckgo_search(query, max_results=100)
+        bing_task = bing_search(query, max_results=100)
+        yahoo_task = yahoo_search(query, max_results=100)
+        mojeek_task = mojeek_search(query, max_results=100)
+        results = await asyncio.gather(ddg_task, bing_task, yahoo_task, mojeek_task)
+        all_urls = set()
+        for engine_urls in results:
+            all_urls.update(engine_urls)
+        all_urls = list(all_urls)
 
-        await msg.edit_text(f"🔍 Found {len(all_urls)} URLs. Analyzing...")
+        await msg.edit_text(f"🔍 Found {len(all_urls)} URLs. Sending file...")
 
-        async with aiohttp.ClientSession(headers={'User-Agent': ua.random}) as session:
-            tasks = [extract_info(url, session) for url in all_urls]
-            results = await asyncio.gather(*tasks)
-
-        clean_results = [r for r in results if r]
-        await save_to_db(query, clean_results)
-
-        # Only send text file, not individual messages!
         filename = f'dork_results_{int(time.time())}.txt'
         with open(filename, 'w', encoding='utf-8') as f:
-            for item in clean_results:
-                f.write(f"{item['url']}\n{item['title']}\n{item['gateway']}\n---\n")
+            for url in all_urls:
+                f.write(url + '\n')
         with open(filename, 'rb') as f:
             await update.message.reply_document(document=f, filename=filename)
         os.remove(filename)
 
-        await msg.edit_text(f"✅ Completed scanning for: {query} ({len(clean_results)} results in file)")
+        await msg.edit_text(f"✅ Completed search for: {query} ({len(all_urls)} unique results in file)")
     else:
-        await update.message.reply_text("❗ Use the command like: /dork intext:\"shopify\" inurl:\"donation\"")
+        await update.message.reply_text("❗ Use the command like: /dork t-shirt")
 
 if __name__ == '__main__':
-    init_db()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('dork', handle_dork))
-    print('🔧 Advanced Dork Scanner Bot running...')
+    print('🔧 Super Dork Scanner Bot running...')
     app.run_polling()
