@@ -7,7 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler
 import time
 import os
 
-TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
+TOKEN = '8108454538:AAE4ZlhpoaN5Sej3M5kukwKaIIWbTr82-lY'
 PROXIES = [
     "http://PP_D4F1YGPKC1-country-UK:omf4xz27@evo-pro.porterproxies.com:61236",
     "http://PP_D4F1YGPKC1-country-SG:omf4xz27@evo-pro.porterproxies.com:61236",
