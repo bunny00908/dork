@@ -13,7 +13,9 @@ PROXIES = [
     "http://PP_D4F1YGPKC1-country-US:omf4xz27@evo-pro.porterproxies.com:61236",
     "http://PP_D4F1YGPKC1-country-IN:omf4xz27@evo-pro.porterproxies.com:61236"
 ]
-GATE_KEYWORDS = ["stripe", "paypal", "square", "authorize.net", "shopify pay", "klarna", "afterpay"]
+GATE_KEYWORDS = [
+    "shopify", "shopify pay", "stripe", "paypal", "square", "authorize.net", "klarna", "afterpay"
+]
 ua = UserAgent()
 
 def init_db():
@@ -51,7 +53,6 @@ async def duckduckgo_search(query, max_results=100):
     return list(results)
 
 async def bing_search(query, max_results=100):
-    # Scrapes Bing HTML (no API key needed, but may get limited at high volume)
     results, page = set(), 0
     async with aiohttp.ClientSession() as session:
         while len(results) < max_results:
@@ -69,13 +70,23 @@ async def bing_search(query, max_results=100):
             await asyncio.sleep(random.uniform(1, 2))
     return list(results)
 
+def detect_gateway(html):
+    html_lower = html.lower()
+    # Priority: Shopify!
+    if "shopify" in html_lower or "shopify pay" in html_lower:
+        return "shopify"
+    for gw in GATE_KEYWORDS:
+        if gw in html_lower:
+            return gw
+    return "Unknown"
+
 async def extract_info(url, session):
     html = await fetch(session, url, proxy=random.choice(PROXIES))
     if not html:
         return None
     soup = BeautifulSoup(html, 'html.parser')
     title = soup.title.string.strip() if soup.title else 'No Title'
-    gateway = next((g for g in GATE_KEYWORDS if g in html.lower()), 'Unknown')
+    gateway = detect_gateway(html)
     return {'url': url, 'title': title, 'gateway': gateway}
 
 async def save_to_db(query, results):
@@ -98,11 +109,11 @@ async def handle_dork(update, context):
         query = ' '.join(context.args)
         msg = await update.message.reply_text(f"🔍 Searching DuckDuckGo & Bing for: {query}")
 
-        ddg_urls = await duckduckgo_search(query, max_results=80)
-        bing_urls = await bing_search(query, max_results=80)
-        all_urls = list(set(ddg_urls + bing_urls))[:160]  # Deduplicate and limit to 160
+        ddg_urls = await duckduckgo_search(query, max_results=100)
+        bing_urls = await bing_search(query, max_results=100)
+        all_urls = list(set(ddg_urls + bing_urls))
 
-        await msg.edit_text(f"🔍 Found {len(all_urls)} URLs. Analyzing (this may take a while)...")
+        await msg.edit_text(f"🔍 Found {len(all_urls)} URLs. Analyzing...")
 
         async with aiohttp.ClientSession(headers={'User-Agent': ua.random}) as session:
             tasks = [extract_info(url, session) for url in all_urls]
@@ -111,12 +122,7 @@ async def handle_dork(update, context):
         clean_results = [r for r in results if r]
         await save_to_db(query, clean_results)
 
-        # Send top 10 in chat for quick view
-        for item in clean_results[:10]:
-            text = f"🔗 {item['url']}\n📛 {item['title']}\n💳 Gateway: {item['gateway']}"
-            await update.message.reply_text(text, reply_to_message_id=update.message.message_id)
-
-        # Also create and send a text file with ALL results!
+        # Only send text file, not individual messages!
         filename = f'dork_results_{int(time.time())}.txt'
         with open(filename, 'w', encoding='utf-8') as f:
             for item in clean_results:
@@ -125,7 +131,7 @@ async def handle_dork(update, context):
             await update.message.reply_document(document=f, filename=filename)
         os.remove(filename)
 
-        await msg.edit_text(f"✅ Completed scanning for: {query} ({len(clean_results)} results)")
+        await msg.edit_text(f"✅ Completed scanning for: {query} ({len(clean_results)} results in file)")
     else:
         await update.message.reply_text("❗ Use the command like: /dork intext:\"shopify\" inurl:\"donation\"")
 
